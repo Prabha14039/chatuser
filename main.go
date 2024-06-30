@@ -12,7 +12,7 @@ type MessageType int
 
 const (
 	ClientConnected MessageType = iota + 1
-	DeleteClient
+	ClientDisconnected
 	NewMessage
 )
 
@@ -27,15 +27,19 @@ func server(messages chan Message) {
 	for {
 		msg := <-messages
 		switch msg.Type {
-		case DeleteClient:
+		case ClientDisconnected:
 			delete(conns, msg.Conn.RemoteAddr().String())
 		case ClientConnected:
+			log.Printf("Client %s connected", msg.Conn.RemoteAddr())
 			conns[msg.Conn.RemoteAddr().String()] = msg.Conn
 		case NewMessage:
+			log.Printf("Client %s sent Message %s", msg.Conn.RemoteAddr(), msg.Text)
 			for _, conn := range conns {
-				_, err := conn.Write([]byte(msg.Text))
-				if err != nil {
-					fmt.Println("Could nor send data to %s: %s", conn.RemoteAddr(), err)
+				if conn.RemoteAddr().String() != msg.Conn.RemoteAddr().String() {
+					_, err := conn.Write([]byte(msg.Text))
+					if err != nil {
+						fmt.Println("Could not send data to %s: %s", conn.RemoteAddr(), err)
+					}
 				}
 			}
 		}
@@ -47,9 +51,10 @@ func clients(conn net.Conn, messages chan Message) {
 	for {
 		n, err := conn.Read(buffer)
 		if err != nil {
+			log.Printf("Could Not read from client %s", conn.RemoteAddr())
 			conn.Close()
 			messages <- Message{
-				Type: DeleteClient,
+				Type: ClientDisconnected,
 				Conn: conn,
 			}
 			return
