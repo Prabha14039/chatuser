@@ -4,9 +4,13 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 )
 
 const port = "6969"
+const MessageRate = 0.5
+const limit = 5
+const BanLimit = 10 * 50
 
 type MessageType int
 
@@ -22,32 +26,69 @@ type Message struct {
 	Text string
 }
 
+type Client struct {
+	Conn        net.Conn
+	LastMessage time.Time
+	StrikeCount int
+}
+
 func server(messages chan Message) {
-	conns := map[string]net.Conn{}
+	clients := map[string]*Client{}
+	bannedMF := map[string]time.Time{}
 	for {
 		msg := <-messages
 		switch msg.Type {
 		case ClientDisconnected:
-			delete(conns, msg.Conn.RemoteAddr().String())
+			delete(clients, msg.Conn.RemoteAddr().String())
 		case ClientConnected:
-			log.Printf("Client %s connected", msg.Conn.RemoteAddr())
-			conns[msg.Conn.RemoteAddr().String()] = msg.Conn
+			addr := msg.Conn.RemoteAddr().(*net.TCPAddr)
+			BannedAT, banned := bannedMF[addr.IP.String()]
+
+			if banned {
+				if time.Now().Sub(BannedAT).Seconds() >= BanLimit {
+					delete(bannedMF, addr.IP.String())
+					banned = false
+
+				}
+			}
+
+			if !banned {
+				log.Printf("Client %s connected", msg.Conn.RemoteAddr())
+				clients[msg.Conn.RemoteAddr().String()] = &Client{
+					Conn:        msg.Conn,
+					LastMessage: time.Now(),
+				}
+			}
+
 		case NewMessage:
-			log.Printf("Client %s sent Message %s", msg.Conn.RemoteAddr(), msg.Text)
-			for _, conn := range conns {
-				if conn.RemoteAddr().String() != msg.Conn.RemoteAddr().String() {
-					_, err := conn.Write([]byte(msg.Text))
-					if err != nil {
-						fmt.Println("Could not send data to %s: %s", conn.RemoteAddr(), err)
+			now := time.Now()
+			addr := msg.Conn.RemoteAddr().String()
+			author := clients[addr]
+			if now.Sub(author.LastMessage).Seconds() > MessageRate && author.StrikeCount < limit {
+				author.LastMessage = now
+				log.Printf("Client %s sent Message %s", msg.Conn.RemoteAddr(), msg.Text)
+				for _, client := range clients {
+					if client.Conn.RemoteAddr().String() != msg.Conn.RemoteAddr().String() {
+						_, err := client.Conn.Write([]byte(msg.Text))
+						if err != nil {
+							fmt.Println("Could not send data to %s: %s", client.Conn.RemoteAddr(), err)
+						}
 					}
 				}
+			} else {
+				if author.StrikeCount < limit {
+					author.StrikeCount = +1
+				} else {
+					author
+				}
+
 			}
 		}
 	}
 }
 
 func clients(conn net.Conn, messages chan Message) {
-	buffer := make([]byte, 512)
+	buffer := make([]byte, 64)
 	for {
 		n, err := conn.Read(buffer)
 		if err != nil {
