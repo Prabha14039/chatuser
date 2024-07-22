@@ -62,13 +62,13 @@ func server(messages chan Message) {
 
 		case NewMessage:
 			now := time.Now()
-			addr := msg.Conn.RemoteAddr().String()
-			author := clients[addr]
-			if now.Sub(author.LastMessage).Seconds() > MessageRate && author.StrikeCount < limit {
+			AuthorAddr := msg.Conn.RemoteAddr().(*net.TCPAddr)
+			author := clients[AuthorAddr.String()]
+			if now.Sub(author.LastMessage).Seconds() > MessageRate {
 				author.LastMessage = now
 				log.Printf("Client %s sent Message %s", msg.Conn.RemoteAddr(), msg.Text)
 				for _, client := range clients {
-					if client.Conn.RemoteAddr().String() != msg.Conn.RemoteAddr().String() {
+					if client.Conn.RemoteAddr().String() != AuthorAddr.String() {
 						_, err := client.Conn.Write([]byte(msg.Text))
 						if err != nil {
 							fmt.Println("Could not send data to %s: %s", client.Conn.RemoteAddr(), err)
@@ -76,17 +76,15 @@ func server(messages chan Message) {
 					}
 				}
 			} else {
-				if author.StrikeCount < limit {
-					author.StrikeCount = +1
-				} else {
-					author
+				author.StrikeCount = +1
+				if author.StrikeCount >= limit {
+					bannedMF[AuthorAddr.String()] = now
+					author.Conn.Close()
 				}
-
 			}
 		}
 	}
 }
-
 func clients(conn net.Conn, messages chan Message) {
 	buffer := make([]byte, 64)
 	for {
